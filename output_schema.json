@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["slide_id", "tls", "tumor_bed", "maturity", "patient_endpoints"],
+  "properties": {
+    "slide_id": {"type": "string"},
+    "tls": {
+      "type": "object",
+      "required": ["components", "segmentation_confidence"],
+      "properties": {
+        "components": {"type": "array"},
+        "segmentation_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "wsi_coordinates": {"type": "array"},
+        "spatial_compartment": {"type": "string", "enum": ["peritumoral", "invasive_margin", "intratumoral"]}
+      }
+    },
+    "tumor_bed": {
+      "type": "object",
+      "required": ["foreground_fraction"],
+      "properties": {
+        "foreground_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "tls_tumor_bed_overlap": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "maturity": {
+      "type": "object",
+      "required": ["class_order", "probabilities", "ordinal_logits", "entropy"],
+      "properties": {
+        "class_order": {"const": ["E-TLS", "P-TLS", "S-TLS"]},
+        "probabilities": {"type": "array", "minItems": 3, "maxItems": 3},
+        "ordinal_logits": {"type": "array", "minItems": 2, "maxItems": 2},
+        "entropy": {"type": "number", "minimum": 0}
+      }
+    },
+    "patient_endpoints": {
+      "type": "object",
+      "properties": {
+        "tls_count": {"type": "number", "minimum": 0},
+        "tls_density": {"type": "number", "minimum": 0},
+        "mature_tls_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "spatial_entropy": {"type": "number", "minimum": 0, "maximum": 1},
+        "sm_tls_score": {"type": "number", "minimum": 0}
+      }
+    }
+  }
+}
+
