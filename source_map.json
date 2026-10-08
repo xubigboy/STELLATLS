@@ -1,0 +1,84 @@
+{
+  "public_package": "public_algorithm_code_20261008",
+  "source_scripts": {
+    "research_pipeline.py": {
+      "target": "src/research.py",
+      "symbols": [
+        "MultiScaleEncoder",
+        "HierarchicalTokenCompressor",
+        "PathologyAwareMoE",
+        "CoordinateGraphTransformer",
+        "OrdinalMaturityHead",
+        "UnifiedTLSResearchModel",
+        "STELLATLS",
+        "ordinal_targets",
+        "multitask_loss"
+      ]
+    },
+    "three_stage_models.py": {
+      "target": "src/research.py",
+      "symbols": [
+        "DenseEncoder",
+        "FPNDecoder",
+        "TLSInstanceResearchNet",
+        "TumorBedBoundaryResearchNet",
+        "MaturityContextOrdinalResearchNet",
+        "RAPIDTLS",
+        "GATETB",
+        "ORDMoE",
+        "tls_loss",
+        "tumor_bed_loss",
+        "maturity_loss"
+      ]
+    },
+    "tls_v5_uncertainty_cascade.py": {
+      "target": "src/ops.py",
+      "symbols": [
+        "aggregate_snapshot_tta",
+        "apply_tls_cascade"
+      ]
+    },
+    "quality_conditioned_maturity_router.py": {
+      "target": "src/research_ops.py",
+      "symbols": [
+        "blend_quality_experts"
+      ]
+    },
+    "tls_refactor_v3_hnm_calibration.py": {
+      "target": "src/research_ops.py",
+      "symbols": [
+        "hard_negative_weights",
+        "hard_negative_probabilities",
+        "SlideLevelCalibrator",
+        "fit_slide_calibrator",
+        "calibrated_threshold",
+        "evaluate_slide_calibrator"
+      ]
+    },
+    "maturity_tta_calibration.py": {
+      "target": "src/research_ops.py",
+      "symbols": [
+        "aggregate_maturity_tta",
+        "ordinal_prediction",
+        "select_ordinal_thresholds"
+      ]
+    },
+    "STELLA-TLS Modules A-D": {
+      "target": "src/spatial.py",
+      "symbols": [
+        "generate_candidate_tiles",
+        "map_patch_point_to_wsi",
+        "assign_spatial_compartment",
+        "build_descriptive_tls_graph",
+        "patient_level_endpoints"
+      ]
+    }
+  },
+  "excluded": [
+    "private checkpoint paths",
+    "H-drive dataset adapters",
+    "locked-result evaluation scripts",
+    "YOLO/ultralytics runtime dependency"
+  ]
+}
+
