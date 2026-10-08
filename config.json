@@ -1,0 +1,40 @@
+{
+  "input": {
+    "color_space": "RGB",
+    "tile_size": 256,
+    "wsi_field_pixels": 2048,
+    "wsi_scale": 8,
+    "candidate_tile_sampling": "tissue_qualified_sliding_window",
+    "maturity_crop_size": 224,
+    "maturity_second_view": "gaussian_blur_same_crop",
+    "coordinate_convention": "x_wsi=x0+scale*x_local;y_wsi=y0+scale*y_local"
+  },
+  "tls": {
+    "algorithm": "RAPID-TLS",
+    "model": "RAPIDTLS",
+    "locked_baseline": "YOLO11n-seg",
+    "heads": ["primary_mask", "auxiliary_mask", "boundary", "center", "objectness", "box"],
+    "tta": ["identity", "horizontal_flip", "vertical_flip"],
+    "base_threshold": 0.45,
+    "uncertainty_weight": 0.2,
+    "objectness_gate": 0.2,
+    "min_component_area_px": 64
+  },
+  "tumor_bed": {
+    "algorithm": "GATE-TB",
+    "model": "GATETB",
+    "locked_baseline": "SegFormer-B0",
+    "heads": ["semantic", "boundary"],
+    "semantic_threshold": 0.55
+  },
+  "maturity": {
+    "algorithm": "ORD-MoE",
+    "model": "ORDMoE",
+    "locked_baseline": "ConvNeXt-Tiny",
+    "classes": ["E-TLS", "P-TLS", "S-TLS"],
+    "input_views": ["rgb_crop", "gaussian_blurred_same_crop"],
+    "router": "segmentation_quality_conditioned",
+    "ordinal_logits": 2
+  }
+}
+
