@@ -1,73 +1,23 @@
-# STELLA-TLS public algorithm code
+# STELLA-TLS
 
-This package exposes the public three-stage implementation described by
-STELLA-TLS: Spatial Tri-stage Explainable Learning for Lymphoid Architecture of
-Tertiary Lymphoid Structures. The code is self-contained and does not read the
-locked H-drive checkpoints or datasets.
+STELLA-TLS is our public reference implementation for automated analysis of tertiary lymphoid structures (TLS) in H&E whole-slide images.
 
-## Algorithm names
+The workflow takes a whole-slide image through four steps:
 
-The public names follow the manuscript workflow:
+1. Generate tissue-qualified candidate tiles while preserving their WSI coordinates.
+2. Run TLS instance segmentation and tumor-bed segmentation in parallel.
+3. Classify each TLS crop with a dual-view ordinal maturity model into E-TLS, PFL-TLS, or SFL-TLS.
+4. Map the results back to the slide and summarize TLS distribution, maturity, and spatial organization at patient level.
 
-- `RAPIDTLS` (`RAPID-TLS`): TLS instance segmentation with a 24/48/96/192
-  residual GroupNorm encoder, a 1x1 plus dilation-2/4 atrous pyramid, a
-  progressive skip-fusion decoder, and primary/auxiliary masks, boundary and
-  centre maps, objectness, and box regression heads.
-- `GATETB` (`GATE-TB`): gated tumor-bed semantic segmentation with an auxiliary
-  boundary head.
-- `ORDMoE` (`ORD-MoE`): dual-view maturity classifier with morphology experts,
-  categorical prediction, and cumulative ordinal prediction for E-TLS, P-TLS,
-  and S-TLS.
-- `STELLATLS` (`STELLA-TLS`): wrapper preserving the Module B to Module C
-  order. Module A and Module D are implemented by `src/spatial.py` utilities.
+![STELLA-TLS workflow](docs/stella_tls_architecture.png)
 
-The previous implementation names remain available for compatibility:
-`TLSInstanceResearchNet`, `TumorBedBoundaryResearchNet`, and
-`MaturityContextOrdinalResearchNet`.
+## Public models
 
-## Workflow alignment
+- **RAPID-TLS**: TLS instance segmentation with multi-scale feature extraction and auxiliary structure-aware prediction heads.
+- **GATE-TB**: tumor-bed semantic segmentation with boundary-aware refinement.
+- **ORD-MoE**: dual-view ordinal maturity classification using the original crop and a Gaussian-blurred view.
 
-Module A uses deterministic tissue-qualified, coverage-preserving candidate
-tiles. `generate_candidate_tiles` accepts a low-resolution tissue mask and
-retains each tile's origin, scale, and tissue coverage. `map_patch_point_to_wsi`
-maps local coordinates back to the WSI frame using `x_wsi=x0+scale*x` and
-`y_wsi=y0+scale*y`.
-
-Module B runs RAPID-TLS and GATE-TB in parallel on the same coordinate-preserving
-tile grid. `apply_tls_cascade` performs TTA aggregation, uncertainty-aware
-thresholding, objectness gating, connected-component separation, and area
-filtering. The manuscript-aligned defaults are a 0.55 mask threshold, a 0.05
-objectness gate, and a 16-pixel minimum component area; uncertainty weighting
-is optional and defaults to zero.
-
-Module C sends the same TLS crop and its Gaussian-blurred second view to
-ORD-MoE. The three maturity states are ordered as E-TLS, PFL-TLS, and SFL-TLS;
-`ordinal_prediction` and `select_ordinal_thresholds` implement the cumulative
-ordinal decision path.
-
-Module D uses `assign_spatial_compartment` for the 500-μm boundary rule,
-`build_descriptive_tls_graph` for a non-trainable coordinate-aware kNN graph,
-and `patient_level_endpoints` for TLS count, density, mature ratio, spatial
-entropy, and compartment counts. The manuscript does not define an additional
-spatial-maturity score; the locked AI-TLS score is calculated separately. The
-graph utility is descriptive and does not imply a trainable graph neural
-network.
-
-RAPID-TLS uses the manuscript-aligned weighted objective: primary-mask BCE
-(0.65, positive-class weight 2.0), Dice (0.90), Tversky (0.90; α=0.30,
-β=0.70), auxiliary-mask Dice (0.35), boundary loss (0.20), centre focal BCE
-(0.10), objectness BCE (0.12), and positive-sample box Smooth L1 (0.05).
-
-The public package contains the core models and deterministic utilities. It
-does not include a scanner-specific WSI reader or the locked private datasets
-and checkpoints. The training driver is intentionally a compact NPZ reference
-driver; production WSI adapters should preserve tile origins, scale factors,
-and the manuscript-defined post-processing settings.
-
-`UnifiedTLSResearchModel` remains available as an optional cross-stage research
-extension with hierarchical token compression, pathology-aware MoE, coordinate
-graph attention, and transformer refinement. It is not required for the
-paper-aligned STELLA-TLS three-stage wrapper.
+The package contains the core PyTorch models, training driver, post-processing, coordinate mapping, spatial localization, and patient-level aggregation utilities. It does not include private WSI data, annotations, or production checkpoints.
 
 ## Install
 
@@ -75,24 +25,7 @@ paper-aligned STELLA-TLS three-stage wrapper.
 pip install -r requirements.txt
 ```
 
-## Data format
-
-Use one `.npz` file per task.
-
-```text
-TLS:       image, mask, optional objectness, optional box, optional center
-Tumor-bed: image, mask
-Maturity:  local, context, label
-```
-
-Images may be `NCHW` or `NHWC`. Numeric maturity labels are `0=E-TLS`,
-`1=PFL-TLS`, and `2=SFL-TLS`.
-
-If a TLS NPZ file contains `center`, it is used as the centre heatmap target;
-otherwise the driver derives a compact foreground-centroid heatmap from the
-binary mask for the auxiliary centre head.
-
-## Train
+## Train the three stages
 
 ```bash
 python train.py --task tls --data tls_train.npz --out checkpoints/rapid_tls.pt --epochs 1
@@ -100,22 +33,4 @@ python train.py --task tumor_bed --data tumor_bed_train.npz --out checkpoints/ga
 python train.py --task maturity --data maturity_train.npz --out checkpoints/ord_moe.pt --epochs 1
 ```
 
-The driver trains RAPID-TLS, GATE-TB, and ORD-MoE by default. Use
-`--variant compact` only for the small compatibility models in `src/models.py`.
-Use `--device cuda` when CUDA is available.
-
-The locked production TLS baseline remains `YOLO11n-seg`; it is only a
-comparison baseline. The new STELLA-TLS models do not call YOLO or depend on
-`ultralytics`.
-
-## Public module map
-
-```text
-src/models.py        compact compatibility models
-src/research.py      RAPID-TLS, GATE-TB, ORD-MoE and research losses
-src/spatial.py       Module A tile mapping and Module D spatial endpoints
-src/ops.py           segmentation and maturity inference post-processing
-src/research_ops.py  mining, TTA, ordinal and slide calibration utilities
-train.py             NPZ training driver
-source_map.json      mapping from the six internal scripts to public modules
-```
+Each task uses a compact `.npz` reference format. See `train.py`, `config.json`, and `output_schema.json` for the public interfaces.
