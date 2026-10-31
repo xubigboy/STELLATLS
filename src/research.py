@@ -348,6 +348,144 @@ class DenseEncoder(nn.Module):
         return x0, x1, x2, x3
 
 
+def _rapid_group_count(channels: int) -> int:
+    """Choose a stable GroupNorm group count for RAPID-TLS channels."""
+    for groups in (16, 8, 4, 2, 1):
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
+class RapidConvGNAct(nn.Module):
+    """Convolution followed by GroupNorm and GELU for RAPID-TLS."""
+
+    def __init__(
+        self,
+        cin: int,
+        cout: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        dilation: int = 1,
+        activation: bool = True,
+    ):
+        super().__init__()
+        padding = dilation * (kernel_size - 1) // 2
+        layers: list[nn.Module] = [
+            nn.Conv2d(
+                cin,
+                cout,
+                kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                bias=False,
+            ),
+            nn.GroupNorm(_rapid_group_count(cout), cout),
+        ]
+        if activation:
+            layers.append(nn.GELU())
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.block(x)
+
+
+class RapidResidualBlock(nn.Module):
+    """Residual convolutional block used by the RAPID-TLS encoder/decoder."""
+
+    def __init__(self, cin: int, cout: int, stride: int = 1):
+        super().__init__()
+        self.conv1 = RapidConvGNAct(cin, cout, stride=stride)
+        self.conv2 = RapidConvGNAct(cout, cout, activation=False)
+        self.shortcut: nn.Module
+        if cin == cout and stride == 1:
+            self.shortcut = nn.Identity()
+        else:
+            self.shortcut = RapidConvGNAct(cin, cout, kernel_size=1, stride=stride)
+        self.activation = nn.GELU()
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.activation(self.conv2(self.conv1(x)) + self.shortcut(x))
+
+
+class RapidEncoder(nn.Module):
+    """Four-stage 24/48/96/192 residual GroupNorm encoder."""
+
+    def __init__(self, base: int = 24):
+        super().__init__()
+        self.channels = (base, base * 2, base * 4, base * 8)
+        c1, c2, c3, c4 = self.channels
+        self.stem = RapidConvGNAct(3, c1, stride=1)
+        self.stage1 = RapidResidualBlock(c1, c1, stride=2)
+        self.stage2 = RapidResidualBlock(c1, c2, stride=2)
+        self.stage3 = RapidResidualBlock(c2, c3, stride=2)
+        self.stage4 = RapidResidualBlock(c3, c4, stride=2)
+
+    def forward(self, x: Tensor) -> dict[str, Tensor]:
+        stem = self.stem(x)
+        stage1 = self.stage1(stem)
+        stage2 = self.stage2(stage1)
+        stage3 = self.stage3(stage2)
+        stage4 = self.stage4(stage3)
+        return {
+            "stem": stem,
+            "stage1": stage1,
+            "stage2": stage2,
+            "stage3": stage3,
+            "stage4": stage4,
+        }
+
+
+class RapidAtrousPyramid(nn.Module):
+    """1x1 plus dilation-2/4 branches at the RAPID-TLS bottleneck."""
+
+    def __init__(self, channels: int):
+        super().__init__()
+        branch_channels = max(channels // 2, 1)
+        self.branches = nn.ModuleList([
+            RapidConvGNAct(channels, branch_channels, kernel_size=1),
+            RapidConvGNAct(channels, branch_channels, dilation=2),
+            RapidConvGNAct(channels, branch_channels, dilation=4),
+        ])
+        self.project = RapidConvGNAct(branch_channels * 3, channels)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.project(torch.cat([branch(x) for branch in self.branches], dim=1))
+
+
+class RapidSkipFusion(nn.Module):
+    """Progressive upsampling and additive encoder-decoder skip fusion."""
+
+    def __init__(self, cin: int, cskip: int, cout: int):
+        super().__init__()
+        self.main = RapidConvGNAct(cin, cout, kernel_size=1)
+        self.skip = RapidConvGNAct(cskip, cout, kernel_size=1)
+        self.refine = RapidResidualBlock(cout, cout)
+
+    def forward(self, x: Tensor, skip: Tensor) -> Tensor:
+        x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        return self.refine(self.main(x) + self.skip(skip))
+
+
+class RapidDecoder(nn.Module):
+    """Progressive decoder restoring full-resolution TLS contours."""
+
+    def __init__(self, base: int = 24, out_channels: int = 64):
+        super().__init__()
+        c1, c2, c3, c4 = base, base * 2, base * 4, base * 8
+        self.fuse3 = RapidSkipFusion(c4, c3, c3)
+        self.fuse2 = RapidSkipFusion(c3, c2, out_channels)
+        self.fuse1 = RapidSkipFusion(out_channels, c1, out_channels)
+        self.fuse_stem = RapidSkipFusion(out_channels, c1, out_channels)
+
+    def forward(self, features: dict[str, Tensor], bottleneck: Tensor) -> Tensor:
+        x = self.fuse3(bottleneck, features["stage3"])
+        x = self.fuse2(x, features["stage2"])
+        x = self.fuse1(x, features["stage1"])
+        x = self.fuse_stem(x, features["stem"])
+        return x
+
+
 class FPNDecoder(nn.Module):
     def __init__(self, base: int = 32, out_channels: int = 64):
         super().__init__()
@@ -372,10 +510,17 @@ class FPNDecoder(nn.Module):
 
 
 class TLSInstanceResearchNet(nn.Module):
-    def __init__(self, base: int = 32):
+    """RAPID-TLS residual atrous-pyramid multi-head instance segmenter.
+
+    The default channel schedule is 24/48/96/192, with GroupNorm residual
+    blocks, a 1x1 plus dilation-2/4 bottleneck, and progressive skip fusion.
+    """
+
+    def __init__(self, base: int = 24):
         super().__init__()
-        self.encoder = DenseEncoder(base)
-        self.decoder = FPNDecoder(base, 64)
+        self.encoder = RapidEncoder(base=base)
+        self.atrous = RapidAtrousPyramid(base * 8)
+        self.decoder = RapidDecoder(base=base, out_channels=64)
         self.mask_head = nn.Conv2d(64, 1, 1)
         self.aux_mask_head = nn.Conv2d(64, 1, 1)
         self.boundary_head = nn.Conv2d(64, 1, 1)
@@ -385,8 +530,9 @@ class TLSInstanceResearchNet(nn.Module):
 
     def forward(self, x: Tensor) -> dict[str, Tensor]:
         features = self.encoder(x)
-        dense = self.decoder(features)
-        pooled = F.adaptive_avg_pool2d(features[-1], 1).flatten(1)
+        bottleneck = self.atrous(features["stage4"])
+        dense = self.decoder(features, bottleneck)
+        pooled = F.adaptive_avg_pool2d(bottleneck, 1).flatten(1)
         return {
             "mask_logits": self.mask_head(dense),
             "aux_mask_logits": self.aux_mask_head(dense),
@@ -461,7 +607,35 @@ class MaturityContextOrdinalResearchNet(nn.Module):
         }
 
 
-def tversky_loss(logits: Tensor, target: Tensor, alpha: float = 0.7, beta: float = 0.3) -> Tensor:
+def _center_heatmap_target(target: Tensor, size: tuple[int, int], sigma: float = 0.12) -> Tensor:
+    """Create a centroid heatmap when instance-ID masks are unavailable.
+
+    The public NPZ format provides binary TLS masks. For each positive patch,
+    the foreground centroid is converted to a compact Gaussian target for the
+    auxiliary centre head. Production training can replace this with instance
+    centroids when instance-ID annotations are available.
+    """
+    resized = F.interpolate(target, size=size, mode="nearest")
+    batch, _, height, width = resized.shape
+    yy = torch.linspace(-1.0, 1.0, height, device=resized.device, dtype=resized.dtype).view(1, 1, height, 1)
+    xx = torch.linspace(-1.0, 1.0, width, device=resized.device, dtype=resized.dtype).view(1, 1, 1, width)
+    mass = resized.sum(dim=(2, 3), keepdim=True)
+    safe_mass = mass.clamp_min(1.0)
+    cx = (resized * xx).sum(dim=(2, 3), keepdim=True) / safe_mass
+    cy = (resized * yy).sum(dim=(2, 3), keepdim=True) / safe_mass
+    heat = torch.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2.0 * sigma * sigma))
+    heat = heat * (mass > 0).to(resized.dtype)
+    return heat
+
+
+def _focal_binary_cross_entropy(logits: Tensor, target: Tensor, gamma: float = 2.0) -> Tensor:
+    probability = torch.sigmoid(logits)
+    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    pt = probability * target + (1.0 - probability) * (1.0 - target)
+    return (((1.0 - pt).pow(gamma)) * bce).mean()
+
+
+def tversky_loss(logits: Tensor, target: Tensor, alpha: float = 0.30, beta: float = 0.70) -> Tensor:
     probability = torch.sigmoid(logits)
     target = target.float()
     true_positive = (probability * target).sum(dim=(1, 2, 3))
@@ -473,7 +647,13 @@ def tversky_loss(logits: Tensor, target: Tensor, alpha: float = 0.7, beta: float
     return (1.0 - score).mean()
 
 
-def tls_loss(output: dict[str, Tensor], mask: Tensor, objectness: Tensor | None = None, box: Tensor | None = None) -> Tensor:
+def tls_loss(
+    output: dict[str, Tensor],
+    mask: Tensor,
+    objectness: Tensor | None = None,
+    box: Tensor | None = None,
+    center: Tensor | None = None,
+) -> Tensor:
     target = mask.float()
     if target.ndim == 3:
         target = target.unsqueeze(1)
@@ -482,33 +662,56 @@ def tls_loss(output: dict[str, Tensor], mask: Tensor, objectness: Tensor | None 
     inter = (probability * target).sum(dim=(1, 2, 3))
     denom = probability.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
     dice = (1.0 - (2.0 * inter + 1e-6) / (denom + 1e-6)).mean()
-    primary_bce = F.binary_cross_entropy_with_logits(output["mask_logits"], target)
-    loss = primary_bce + dice + tversky_loss(output["mask_logits"], target)
+    primary_bce = F.binary_cross_entropy_with_logits(
+        output["mask_logits"],
+        target,
+        pos_weight=output["mask_logits"].new_tensor(2.0),
+    )
+    loss = 0.65 * primary_bce + 0.90 * dice + 0.90 * tversky_loss(
+        output["mask_logits"], target, alpha=0.30, beta=0.70
+    )
     if "aux_mask_logits" in output:
         aux_probability = torch.sigmoid(output["aux_mask_logits"])
         aux_inter = (aux_probability * target).sum(dim=(1, 2, 3))
         aux_denom = aux_probability.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
-        loss = loss + 0.25 * (1.0 - (2.0 * aux_inter + 1e-6) / (aux_denom + 1e-6)).mean()
+        loss = loss + 0.35 * (1.0 - (2.0 * aux_inter + 1e-6) / (aux_denom + 1e-6)).mean()
     if "boundary_logits" in output:
         dilated = F.max_pool2d(target, 3, 1, 1)
         eroded = -F.max_pool2d(-target, 3, 1, 1)
         boundary = (dilated - eroded).clamp(0, 1)
-        loss = loss + 0.5 * F.binary_cross_entropy_with_logits(output["boundary_logits"], boundary)
+        loss = loss + 0.20 * F.binary_cross_entropy_with_logits(output["boundary_logits"], boundary)
     if "center_logits" in output:
-        center_target = F.interpolate(target, size=output["center_logits"].shape[-2:], mode="nearest")
-        center_probability = torch.sigmoid(output["center_logits"])
-        focal_weight = (1.0 - center_probability).pow(2.0)
-        center_focal = (focal_weight * F.binary_cross_entropy_with_logits(
-            output["center_logits"], center_target, reduction="none"
-        )).mean()
-        loss = loss + 0.25 * center_focal
+        if center is None:
+            center_target = _center_heatmap_target(target, output["center_logits"].shape[-2:])
+        else:
+            center_target = center.float()
+            if center_target.ndim == 3:
+                center_target = center_target.unsqueeze(1)
+            center_target = F.interpolate(
+                center_target,
+                size=output["center_logits"].shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            ).clamp(0.0, 1.0)
+        loss = loss + 0.10 * _focal_binary_cross_entropy(
+            output["center_logits"], center_target
+        )
     if objectness is not None:
-        loss = loss + 0.5 * F.binary_cross_entropy_with_logits(
+        objectness = objectness.float().reshape(-1)
+        loss = loss + 0.12 * F.binary_cross_entropy_with_logits(
             output["objectness_logits"].squeeze(1), objectness.float()
         )
     if box is not None:
         box_key = "box_raw" if "box_raw" in output else "box_regression"
-        loss = loss + 0.1 * F.smooth_l1_loss(output[box_key], box.float())
+        box = box.float()
+        if objectness is None:
+            positive = torch.ones(output[box_key].shape[0], dtype=torch.bool, device=box.device)
+        else:
+            positive = objectness > 0.5
+        if positive.any():
+            loss = loss + 0.05 * F.smooth_l1_loss(
+                output[box_key][positive], box[positive]
+            )
     return loss
 
 
@@ -546,7 +749,7 @@ def maturity_loss(output: dict[str, Tensor], labels: Tensor) -> Tensor:
 
 
 class RAPIDTLS(TLSInstanceResearchNet):
-    """STELLA-TLS public name for the TLS instance segmentation stage."""
+    """STELLA-TLS public name for the RAPID-TLS TLS instance segmenter."""
 
 
 class GATETB(TumorBedBoundaryResearchNet):
@@ -566,7 +769,7 @@ class STELLATLS(nn.Module):
     are provided by the public spatial utilities rather than this module.
     """
 
-    def __init__(self, tls_base: int = 32, tumor_base: int = 32, maturity_dim: int = 128):
+    def __init__(self, tls_base: int = 24, tumor_base: int = 32, maturity_dim: int = 128):
         super().__init__()
         self.rapid_tls = RAPIDTLS(base=tls_base)
         self.gate_tb = GATETB(base=tumor_base)
@@ -584,5 +787,4 @@ class STELLATLS(nn.Module):
             "gate_tb": self.gate_tb(tumor_bed_patch),
             "ord_moe": self.ord_moe(maturity_crop, maturity_blurred_crop),
         }
-
 

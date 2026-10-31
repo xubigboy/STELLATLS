@@ -26,7 +26,7 @@
       "type": "object",
       "required": ["class_order", "probabilities", "ordinal_logits", "entropy"],
       "properties": {
-        "class_order": {"const": ["E-TLS", "P-TLS", "S-TLS"]},
+        "class_order": {"const": ["E-TLS", "PFL-TLS", "SFL-TLS"]},
         "probabilities": {"type": "array", "minItems": 3, "maxItems": 3},
         "ordinal_logits": {"type": "array", "minItems": 2, "maxItems": 2},
         "entropy": {"type": "number", "minimum": 0}
@@ -38,10 +38,8 @@
         "tls_count": {"type": "number", "minimum": 0},
         "tls_density": {"type": "number", "minimum": 0},
         "mature_tls_ratio": {"type": "number", "minimum": 0, "maximum": 1},
-        "spatial_entropy": {"type": "number", "minimum": 0, "maximum": 1},
-        "sm_tls_score": {"type": "number", "minimum": 0}
+        "spatial_entropy": {"type": "number", "minimum": 0, "maximum": 1}
       }
     }
   }
 }
-

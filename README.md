@@ -9,8 +9,10 @@ locked H-drive checkpoints or datasets.
 
 The public names follow the manuscript workflow:
 
-- `RAPIDTLS` (`RAPID-TLS`): TLS instance segmentation with primary and
-  auxiliary masks, boundary and center maps, objectness, and box regression.
+- `RAPIDTLS` (`RAPID-TLS`): TLS instance segmentation with a 24/48/96/192
+  residual GroupNorm encoder, a 1x1 plus dilation-2/4 atrous pyramid, a
+  progressive skip-fusion decoder, and primary/auxiliary masks, boundary and
+  centre maps, objectness, and box regression heads.
 - `GATETB` (`GATE-TB`): gated tumor-bed semantic segmentation with an auxiliary
   boundary head.
 - `ORDMoE` (`ORD-MoE`): dual-view maturity classifier with morphology experts,
@@ -34,18 +36,33 @@ maps local coordinates back to the WSI frame using `x_wsi=x0+scale*x` and
 Module B runs RAPID-TLS and GATE-TB in parallel on the same coordinate-preserving
 tile grid. `apply_tls_cascade` performs TTA aggregation, uncertainty-aware
 thresholding, objectness gating, connected-component separation, and area
-filtering.
+filtering. The manuscript-aligned defaults are a 0.55 mask threshold, a 0.05
+objectness gate, and a 16-pixel minimum component area; uncertainty weighting
+is optional and defaults to zero.
 
 Module C sends the same TLS crop and its Gaussian-blurred second view to
-ORD-MoE. The three maturity states are ordered as E-TLS, P-TLS, and S-TLS;
+ORD-MoE. The three maturity states are ordered as E-TLS, PFL-TLS, and SFL-TLS;
 `ordinal_prediction` and `select_ordinal_thresholds` implement the cumulative
 ordinal decision path.
 
 Module D uses `assign_spatial_compartment` for the 500-μm boundary rule,
 `build_descriptive_tls_graph` for a non-trainable coordinate-aware kNN graph,
 and `patient_level_endpoints` for TLS count, density, mature ratio, spatial
-entropy, and SM-TLS score. The graph utility is descriptive and does not imply
-a trainable graph neural network.
+entropy, and compartment counts. The manuscript does not define an additional
+spatial-maturity score; the locked AI-TLS score is calculated separately. The
+graph utility is descriptive and does not imply a trainable graph neural
+network.
+
+RAPID-TLS uses the manuscript-aligned weighted objective: primary-mask BCE
+(0.65, positive-class weight 2.0), Dice (0.90), Tversky (0.90; α=0.30,
+β=0.70), auxiliary-mask Dice (0.35), boundary loss (0.20), centre focal BCE
+(0.10), objectness BCE (0.12), and positive-sample box Smooth L1 (0.05).
+
+The public package contains the core models and deterministic utilities. It
+does not include a scanner-specific WSI reader or the locked private datasets
+and checkpoints. The training driver is intentionally a compact NPZ reference
+driver; production WSI adapters should preserve tile origins, scale factors,
+and the manuscript-defined post-processing settings.
 
 `UnifiedTLSResearchModel` remains available as an optional cross-stage research
 extension with hierarchical token compression, pathology-aware MoE, coordinate
@@ -63,13 +80,17 @@ pip install -r requirements.txt
 Use one `.npz` file per task.
 
 ```text
-TLS:       image, mask, optional objectness, optional box
+TLS:       image, mask, optional objectness, optional box, optional center
 Tumor-bed: image, mask
 Maturity:  local, context, label
 ```
 
 Images may be `NCHW` or `NHWC`. Numeric maturity labels are `0=E-TLS`,
-`1=P-TLS`, and `2=S-TLS`.
+`1=PFL-TLS`, and `2=SFL-TLS`.
+
+If a TLS NPZ file contains `center`, it is used as the centre heatmap target;
+otherwise the driver derives a compact foreground-centroid heatmap from the
+binary mask for the auxiliary centre head.
 
 ## Train
 
@@ -98,4 +119,3 @@ src/research_ops.py  mining, TTA, ordinal and slide calibration utilities
 train.py             NPZ training driver
 source_map.json      mapping from the six internal scripts to public modules
 ```
-

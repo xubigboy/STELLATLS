@@ -4,6 +4,10 @@ from .research import (
     DenseEncoder,
     FPNDecoder,
     HierarchicalTokenCompressor,
+    RapidAtrousPyramid,
+    RapidDecoder,
+    RapidEncoder,
+    RapidResidualBlock,
     MaturityContextOrdinalResearchNet,
     MultiScaleEncoder,
     OrdinalMaturityHead,
@@ -65,6 +69,10 @@ __all__ = [
     "UnifiedTLSResearchModel",
     "DenseEncoder",
     "FPNDecoder",
+    "RapidEncoder",
+    "RapidResidualBlock",
+    "RapidAtrousPyramid",
+    "RapidDecoder",
     "MultiScaleEncoder",
     "HierarchicalTokenCompressor",
     "PathologyAwareMoE",
@@ -99,4 +107,3 @@ __all__ = [
     "build_descriptive_tls_graph",
     "patient_level_endpoints",
 ]
-

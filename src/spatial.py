@@ -91,14 +91,16 @@ def patient_level_endpoints(
     evaluable_tissue_area: float,
     tumor_bed_area: float,
 ) -> dict[str, float]:
-    """Calculate the STELLA-TLS patient-level spatial-maturity endpoints."""
+    """Calculate manuscript-aligned patient-level spatial endpoints.
+
+    ``tumor_bed_area`` is retained for API compatibility with earlier public
+    versions; the manuscript's locked AI-TLS score is calculated separately
+    from E-TLS and SFL-TLS ratios and is not emitted here.
+    """
     count = len(nodes)
     area = max(float(evaluable_tissue_area), 1e-12)
-    tumor_area = max(float(tumor_bed_area), 1e-12)
     compartment_order = ("peritumoral", "invasive_margin", "intratumoral")
-    spatial_weight = {name: index + 1 for index, name in enumerate(compartment_order)}
     compartment_counts = {name: 0 for name in compartment_order}
-    sm_score = 0.0
     mature_count = 0
     for node in nodes:
         compartment = str(node.get("compartment", "invasive_margin"))
@@ -108,13 +110,10 @@ def patient_level_endpoints(
         probabilities = np.asarray(node.get("maturity_probabilities", []), dtype=np.float64)
         if probabilities.shape == (3,):
             probabilities = probabilities / max(float(probabilities.sum()), 1e-12)
-            maturity_weight = float(np.dot(probabilities, np.array([1.0, 2.0, 3.0])))
             predicted = int(np.argmax(probabilities))
         else:
             predicted = int(node.get("maturity_index", 0))
-            maturity_weight = float(np.clip(predicted + 1, 1, 3))
         mature_count += int(predicted == 2)
-        sm_score += float(node.get("area", 0.0)) * maturity_weight * spatial_weight[compartment]
     proportions = np.asarray([compartment_counts[name] for name in compartment_order], dtype=np.float64)
     proportions /= max(float(proportions.sum()), 1.0)
     spatial_entropy = float(-(proportions * np.log(np.clip(proportions, 1e-12, 1.0))).sum() / np.log(3.0))
@@ -123,9 +122,7 @@ def patient_level_endpoints(
         "tls_density": float(count / area),
         "mature_tls_ratio": float(mature_count / max(count, 1)),
         "spatial_entropy": spatial_entropy,
-        "sm_tls_score": float(sm_score / tumor_area),
         "peritumoral_count": float(compartment_counts["peritumoral"]),
         "invasive_margin_count": float(compartment_counts["invasive_margin"]),
         "intratumoral_count": float(compartment_counts["intratumoral"]),
     }
-

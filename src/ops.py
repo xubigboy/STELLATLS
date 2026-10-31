@@ -47,10 +47,10 @@ def _filter_components(mask: np.ndarray, min_area: int) -> tuple[np.ndarray, int
 def apply_tls_cascade(
     probabilities: np.ndarray,
     objectness: float | Sequence[float],
-    base_threshold: float = 0.45,
-    uncertainty_weight: float = 0.20,
-    objectness_gate: float = 0.20,
-    min_component_area_px: int = 64,
+    base_threshold: float = 0.55,
+    uncertainty_weight: float = 0.0,
+    objectness_gate: float = 0.05,
+    min_component_area_px: int = 16,
 ) -> dict[str, Any]:
     mean_p, uncertainty = aggregate_snapshot_tta(probabilities)
     threshold = base_threshold + uncertainty_weight * uncertainty
@@ -128,4 +128,3 @@ def entropy(probabilities: Sequence[float]) -> float:
     p = np.asarray(probabilities, dtype=np.float64)
     p = p / max(float(p.sum()), 1e-12)
     return float(-(p * np.log(np.clip(p, 1e-12, 1.0))).sum())
-

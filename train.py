@@ -45,6 +45,7 @@ class NpzDataset(Dataset):
             self.masks = torch.from_numpy(self.data["mask"].astype(np.float32))
             self.objectness = torch.from_numpy(self.data["objectness"].astype(np.float32)) if "objectness" in self.data else self.masks.flatten(1).amax(1)
             self.box = torch.from_numpy(self.data["box"].astype(np.float32)) if "box" in self.data else torch.zeros((len(self.images), 4))
+            self.center = torch.from_numpy(self.data["center"].astype(np.float32)) if "center" in self.data else None
         else:
             self.masks = torch.from_numpy(self.data["mask"].astype(np.float32))
 
@@ -55,7 +56,10 @@ class NpzDataset(Dataset):
         if self.task == "maturity":
             return self.local[index], self.context[index], self.labels[index]
         if self.task == "tls":
-            return self.images[index], self.masks[index], self.objectness[index], self.box[index]
+            values = [self.images[index], self.masks[index], self.objectness[index], self.box[index]]
+            if self.center is not None:
+                values.append(self.center[index])
+            return tuple(values)
         return self.images[index], self.masks[index]
 
 
@@ -84,9 +88,10 @@ def train_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Opt
     for batch in loader:
         optimizer.zero_grad(set_to_none=True)
         if task == "tls":
-            image, mask, objectness, box = [x.to(device) for x in batch]
+            image, mask, objectness, box, *center_values = [x.to(device) for x in batch]
             out = model(image)
-            loss = tls_loss(out, mask, objectness, box)
+            center = center_values[0] if center_values else None
+            loss = tls_loss(out, mask, objectness, box, center=center)
         elif task == "tumor_bed":
             image, mask = [x.to(device) for x in batch]
             out = model(image)
@@ -133,4 +138,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

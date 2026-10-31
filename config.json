@@ -13,12 +13,25 @@
     "algorithm": "RAPID-TLS",
     "model": "RAPIDTLS",
     "locked_baseline": "YOLO11n-seg",
+    "encoder_channels": [24, 48, 96, 192],
+    "normalization": "group_norm",
+    "atrous_dilations": [2, 4],
     "heads": ["primary_mask", "auxiliary_mask", "boundary", "center", "objectness", "box"],
     "tta": ["identity", "horizontal_flip", "vertical_flip"],
-    "base_threshold": 0.45,
-    "uncertainty_weight": 0.2,
-    "objectness_gate": 0.2,
-    "min_component_area_px": 64
+    "base_threshold": 0.55,
+    "uncertainty_weight": 0.0,
+    "objectness_gate": 0.05,
+    "min_component_area_px": 16,
+    "loss_weights": {
+      "primary_bce": 0.65,
+      "dice": 0.90,
+      "tversky": 0.90,
+      "auxiliary_dice": 0.35,
+      "boundary": 0.20,
+      "center_focal": 0.10,
+      "objectness": 0.12,
+      "box_smooth_l1": 0.05
+    }
   },
   "tumor_bed": {
     "algorithm": "GATE-TB",
@@ -31,10 +44,9 @@
     "algorithm": "ORD-MoE",
     "model": "ORDMoE",
     "locked_baseline": "ConvNeXt-Tiny",
-    "classes": ["E-TLS", "P-TLS", "S-TLS"],
+    "classes": ["E-TLS", "PFL-TLS", "SFL-TLS"],
     "input_views": ["rgb_crop", "gaussian_blurred_same_crop"],
     "router": "segmentation_quality_conditioned",
     "ordinal_logits": 2
   }
 }
-
