@@ -28,9 +28,9 @@ pip install -r requirements.txt
 ## Train the three stages
 
 ```bash
-python train.py --task tls --data tls_train.npz --out checkpoints/rapid_tls.pt --epochs 1
-python train.py --task tumor_bed --data tumor_bed_train.npz --out checkpoints/gate_tb.pt --epochs 1
-python train.py --task maturity --data maturity_train.npz --out checkpoints/ord_moe.pt --epochs 1
+python train.py --task tls --data tls_train.npz --out checkpoints/rapid_tls.pt
+python train.py --task tumor_bed --data tumor_bed_train.npz --out checkpoints/gate_tb.pt
+python train.py --task maturity --data maturity_train.npz --out checkpoints/ord_moe.pt
 ```
 
 Each task uses a compact `.npz` reference format. See `train.py`, `config.json`, and `output_schema.json` for the public interfaces.
